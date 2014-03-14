@@ -151,12 +151,12 @@ class Analysis:
         '分析各个源的错误比例'
         for sourceName in self.sources:
             #print "start analysis source: ", sourceName
-            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-13 20")
+            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-14 19:30")
 
     def analyTotal(self):
         '分析所有错误的比例分布'
         #print "start analysis total"
-        self.analy(timeCondition = "2014-03-13 20")
+        self.analy(timeCondition = "2014-03-14 19:30")
 
     def doAnalysis(self):
         '对错误进行比例分析'
@@ -281,5 +281,5 @@ class DBHelper:
 if __name__ == "__main__":
     analysis = Analysis()
     #analysis.syncData()
-    analysis.doAnalysis()
-    #analysis.getBBSUserCount()
+    #analysis.doAnalysis()
+    analysis.getBBSUserCount()
