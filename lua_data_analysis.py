@@ -10,6 +10,7 @@ import sqlite3
 # TODO: 绘制图表
 # TODO: 定时同步数据
 # TODO: 数据存储优化
+# TODO: 网盘源特殊分析处理
 
 class Analysis:
 
@@ -35,6 +36,11 @@ class Analysis:
     user_list = []
 
     '''
+    使用论坛测试包的用户
+    '''
+    bbs_user_list = []
+
+    '''
     当前所有日志的总数
     '''
     log_total_count = 0
@@ -43,8 +49,10 @@ class Analysis:
     所有错误码
     '''
     error_codes = [
-        "1", "2", "6", "32", "33", "34", "35", "37"
+        "1", "2", "6", "32", "33", "34", "37"
     ]
+    #"1", "2", "6", "32", "33", "34", "35", "37"
+    #"35":"script time out",
 
     '''
     所有错误码的描述
@@ -56,7 +64,6 @@ class Analysis:
         "32":"script run crash",
         "33":"can not found lua script",
         "34":"crawl result invalid",
-        "35":"script time out",
         "37":"script decrypt error"
     }
 
@@ -97,33 +104,59 @@ class Analysis:
         print "current len of user: ", len(self.user_list)
         print "currnet total log count: ", self.log_total_count
 
-    def analy(self, sourceCondition = None):
+    def analy(self, sourceCondition = None, timeCondition = None):
         '分析错误比例'
-        queryTotalStr = "select count(*) from item where code != 0"
+        queryTotalStr = "select count(*) from item"
         if sourceCondition:
-            queryTotalStr += " and site = '" + sourceCondition + "'"
+            queryTotalStr += " where site = '" + sourceCondition + "'"
+        if timeCondition:
+            if sourceCondition:
+                queryTotalStr += " and uploadTime > '" + timeCondition + "'"
+            else:
+                queryTotalStr += " where uploadTime > '" + timeCondition + "'"
+        itemTotal = self.dbHelper.queryTop(queryTotalStr)
 
-        errorTotal = self.dbHelper.query(queryTotalStr)
+        queryTotalErrorStr = "select count(*) from item where code != 0"
+        if sourceCondition:
+            queryTotalErrorStr += " and site = '" + sourceCondition + "'"
+        if timeCondition:
+            queryTotalErrorStr += " and uploadTime > '" + timeCondition + "'"
+
+        errorTotal = self.dbHelper.queryTop(queryTotalErrorStr)
+
         errorCounts = {}
+        if sourceCondition:
+            errorCounts["source"] = sourceCondition
+        else:
+            errorCounts["source"] = "total"
+        errorCounts["rate"] = str(errorTotal) + "/" + str(itemTotal)
+        errorCounts["error"] = self.percentage(errorTotal, itemTotal)
+
         for code in self.error_codes:
             queryCodeStr = "select count(*) from item where code = " + code
             if sourceCondition:
                 queryCodeStr += " and site = '" + sourceCondition + "'"
-            errorCount = self.dbHelper.query(queryCodeStr)
-            key = code + "(" + self.error_desc[code] + ")"
-            errorCounts[key] = self.percentage(errorCount, errorTotal)
-        print errorCounts
+            if timeCondition:
+                queryCodeStr += " and uploadTime > '" + timeCondition + "'"
+            errorCount = self.dbHelper.queryTop(queryCodeStr)
+            #key = code + "(" + self.error_desc[code] + ")"
+            key = code
+            value = self.percentage(errorCount, errorTotal)
+            if value and value != "0.00%":
+                errorCounts[key] = value
+        self.printErrorTable(errorCounts)
+        #print errorCounts
 
     def analySource(self):
         '分析各个源的错误比例'
         for sourceName in self.sources:
-            print "start analysis source: ", sourceName
-            self.analy(sourceCondition = sourceName)
+            #print "start analysis source: ", sourceName
+            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-13 20")
 
     def analyTotal(self):
         '分析所有错误的比例分布'
-        print "start analysis total"
-        self.analy()
+        #print "start analysis total"
+        self.analy(timeCondition = "2014-03-13 20")
 
     def doAnalysis(self):
         '对错误进行比例分析'
@@ -135,6 +168,28 @@ class Analysis:
         if total == 0:
             return "0.00%"
         return "{:.2%}".format(float(part)/float(total))
+
+    def printErrorTable(self, errortable):
+        '以表格形式打印错误数据'
+        keys = []
+        keys.append("source")
+        keys.append("rate")
+        keys.append("error")
+
+        values = []
+        values.append(errortable.get("source"))
+        values.append(errortable.get("rate"))
+        values.append(errortable.get("error"))
+
+        for key in self.error_codes:
+            if errortable.get(key, None):
+                keys.append(key)
+                values.append(errortable[key])
+
+        row_format ="{:<12}" * (len(keys))
+        print
+        print row_format.format(*keys)
+        print row_format.format(*values)
 
     def parseErrorData(self, data):
         '从Json字符串解析数据'
@@ -157,6 +212,10 @@ class Analysis:
             print "Store new item: ", item
             self.dbHelper.store(item)
 
+    def getBBSUserCount(self):
+        queryStr = "select count(*) from item where lua_version != 0 group by uuid"
+        uuid_counts = self.dbHelper.query(queryStr)
+        print "bbs uuid count: ", len(uuid_counts)
 
 class DBHelper:
     '数据库处理类'
@@ -189,23 +248,30 @@ class DBHelper:
 
     def store(self, item):
         '插入数据项'
-        query = 'insert into item(site, code, uuid, msg, url, version, lua_version, uploadTime) values (?,?,?,?,?,?,?,?)'
+        queryStr = 'insert into item(site, code, uuid, msg, url, version, lua_version, uploadTime) values (?,?,?,?,?,?,?,?)'
         vals = [item["site"], item["code"], item["uuid"], item["msg"], item["url"], item["version"], item["lua_version"], item["uploadTime"]]
-        self.cursor.execute(query, vals)
+        self.cursor.execute(queryStr, vals)
         self.db.commit()
 
-    def query(self, queryStr):
-        '执行查询语句'
+    def queryTop(self, queryStr):
+        '执行查询语句，返回单条结果'
         self.cursor.execute(queryStr)
         row = self.cursor.fetchone()
 
         if row:
             return row[0]
 
+    def query(self, queryStr):
+        '执行查询语句，返回多条结果'
+        self.cursor.execute(queryStr)
+        row = self.cursor.fetchall()
+
+        return row
+
     def getLastTime(self):
         '获取最近一条日志的时间'
-        query = 'select max(uploadTime) from item'
-        self.cursor.execute(query)
+        queryStr = 'select max(uploadTime) from item'
+        self.cursor.execute(queryStr)
         row = self.cursor.fetchone()
 
         if row:
@@ -214,5 +280,6 @@ class DBHelper:
 
 if __name__ == "__main__":
     analysis = Analysis()
-    analysis.syncData()
-    #analysis.doAnalysis()
+    #analysis.syncData()
+    analysis.doAnalysis()
+    #analysis.getBBSUserCount()
