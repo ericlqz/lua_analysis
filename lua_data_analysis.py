@@ -281,5 +281,5 @@ class DBHelper:
 if __name__ == "__main__":
     analysis = Analysis()
     #analysis.syncData()
-    #analysis.doAnalysis()
-    analysis.getBBSUserCount()
+    analysis.doAnalysis()
+    #analysis.getBBSUserCount()
