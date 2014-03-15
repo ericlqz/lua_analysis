@@ -49,7 +49,7 @@ class Analysis:
     所有错误码
     '''
     error_codes = [
-        "1", "2", "6", "32", "33", "34", "37"
+        "1", "2", "6", "7", "32", "33", "34", "37"
     ]
     #"1", "2", "6", "32", "33", "34", "35", "37"
     #"35":"script time out",
@@ -61,6 +61,7 @@ class Analysis:
         "1":"get page failed",
         "2":"parse page failed",
         "6":"video not exists",
+        "7":"msg is empty",
         "32":"script run crash",
         "33":"can not found lua script",
         "34":"crawl result invalid",
@@ -151,12 +152,12 @@ class Analysis:
         '分析各个源的错误比例'
         for sourceName in self.sources:
             #print "start analysis source: ", sourceName
-            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-14 19:30")
+            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-15 19:30")
 
     def analyTotal(self):
         '分析所有错误的比例分布'
         #print "start analysis total"
-        self.analy(timeCondition = "2014-03-14 19:30")
+        self.analy(timeCondition = "2014-03-15 19:30")
 
     def doAnalysis(self):
         '对错误进行比例分析'
@@ -190,6 +191,8 @@ class Analysis:
         print
         print row_format.format(*keys)
         print row_format.format(*values)
+        #print "||"," || ".join(keys),"||"
+        #print "||", " || ".join(values), "||"
 
     def parseErrorData(self, data):
         '从Json字符串解析数据'
@@ -280,6 +283,6 @@ class DBHelper:
 
 if __name__ == "__main__":
     analysis = Analysis()
-    #analysis.syncData()
-    analysis.doAnalysis()
+    analysis.syncData()
+    #analysis.doAnalysis()
     #analysis.getBBSUserCount()
