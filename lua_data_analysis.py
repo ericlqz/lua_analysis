@@ -152,12 +152,12 @@ class Analysis:
         '分析各个源的错误比例'
         for sourceName in self.sources:
             #print "start analysis source: ", sourceName
-            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-15 19:30")
+            self.analy(sourceCondition = sourceName, timeCondition = "2014-03-15 22:00")
 
     def analyTotal(self):
         '分析所有错误的比例分布'
         #print "start analysis total"
-        self.analy(timeCondition = "2014-03-15 19:30")
+        self.analy(timeCondition = "2014-03-15 22:00")
 
     def doAnalysis(self):
         '对错误进行比例分析'
