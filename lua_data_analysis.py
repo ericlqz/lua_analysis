@@ -191,26 +191,28 @@ class Analysis:
         print "||"," || ".join(keys),"||"
         print "||", " || ".join(values), "||"
 
-    def analysis(self, dimension = None, uponTime = None, *params):
+    def analysis(self, params = None):
         """ 针对维度及时间段进行日志分析 """
-        print "analysis dimension: ", dimension, " uponTime: ", uponTime
+        print "invoke analysis. params: ", params
 
-        dimension = dimension or "site"
-        if not uponTime or uponTime == "0":
-            uponTime = "2014-03-16 19"
+        if params:
+            dimension = params.get("dimension", "site")
+            uponTime = params.get("uponTime", "2014-03-16 19")
+            if dimension == 'site':
+                self.analysisOnSite((uponTime,), params)
+            elif dimension == 'uuid':
+                self.analysisOnUser((uponTime,), params)
+            elif dimension == 'url':
+                self.analysisOnMedia((uponTime,), params)
+            elif dimension == 'script':
+                self.analysisOnScript((uponTime,), params)
+            elif dimension == 'box':
+                self.analysisOnBox((uponTime,), params)
 
-        if dimension == 'site':
-            self.analysisOnSite((uponTime,), *params)
-        elif dimension == 'user':
-            self.analysisOnUser((uponTime,), *params)
-        elif dimension == 'media':
-            self.analysisOnMedia((uponTime,), *params)
-        elif dimension == 'script':
-            self.analysisOnScript((uponTime,), *params)
-        else:
-            print "You suck."
+            else:
+                print "You suck."
 
-    def analysisOnSite(self, uponTime, *params):
+    def analysisOnSite(self, uponTime, params):
         """ 针对 源、时间段 进行日志分析 """
         for sourceName in self.sources:
             target = {"name": "源", "value": sourceName}
@@ -220,24 +222,34 @@ class Analysis:
             if len(uponTime) > 1:
                 conditions.append(["uploadTime", "<", "'" + uponTime[1] + "'"])
 
-            print "source: ", sourceName, " conditions: ", conditions
+            if self._debug:
+                print "source: ", sourceName, " conditions: ", conditions
             self.doAnalysis(conditions, target)
 
-    def analysisOnUser(self, uponTime, *params):
+    def analysisOnUser(self, uponTime, params):
         """ 针对 用户、时间段 进行日志分析 """
-        pass
+        print "invoke analysisOnUser"
+        if params:
+            uuid = params["uuid"]
+            target = {"name": "用户", "value": uuid}
+            conditions = []
 
-    def analysisOnMedia(self, uponTime, *params):
+        conditions.append(["uuid", "=", "'" + uuid + "'"])
+        conditions.append(["uploadTime", ">", "'" + uponTime[0] + "'"])
+        if len(uponTime) > 1:
+            conditions.append(["uploadTime", "<", "'" + uponTime[1] + "'"])
+
+        if self._debug:
+            print "uuid: ", uuid, " conditions: ", conditions
+        self.doAnalysis(conditions, target)
+
+    def analysisOnMedia(self, uponTime, params):
         """ 针对 影片、时间段 进行日志分析 """
         if params:
-            media = params[0]
+            media = params["url"]
             self.analysisOnSpecMedia(uponTime, media)
         else:
             self.analysisAllErroredMedia(uponTime)
-
-    def analysisOnScript(self, uponTime, *params):
-        """ 针对 Lua脚本、时间段 进行日志分析 """
-        pass
 
     def analysisOnSpecMedia(self, uponTime, media):
         """ 分析指定影片的错误日志 """
@@ -245,7 +257,7 @@ class Analysis:
         target = {"name": "影片", "value": media}
 
         conditions = []
-        con1 = ["url", "like", "'%" + media + "%'"]
+        #con1 = ["url", "like", "'%" + media + "%'"]
 
         try:
             media.index("//")
@@ -287,6 +299,14 @@ class Analysis:
                 print "We got ", len(erroredUrls), " errored urls"
             for error_url in erroredUrls:
                 self.analysisOnSpecMedia(uponTime, error_url[0])
+
+    def analysisOnScript(self, uponTime, params):
+        """ 针对 Lua脚本、时间段 进行日志分析 """
+        pass
+
+    def analysisOnBox(self, uponTime, params):
+        """ 针对 盒子、时间段 进行日志分析 """
+        pass
 
     def percentage(self, part, total):
         '转换浮点数为百分数'
@@ -401,30 +421,46 @@ def main(argv):
     import getopt
 
     try:
-        opts, args = getopt.getopt(argv, "saubd")
+        opts, args = getopt.getopt(argv, "i:a:s:u:r:b:l:t:d", [''])
     except getopt.GetoptError:
         sys.exit(2)
 
     analysis = Analysis()
+    func = analysis.analysisOnSite
+    params = {}
 
     for opt, arg in opts:
-        if opt == '-s':
-            print "Try to sync data"
-            analysis.syncData()
+        if opt == '-i':
+            print "invoke: ", arg
+            if arg == 'sync':
+                func = analysis.syncData
         elif opt == '-a':
-            print "Try to analysis data"
-            analysis.analysis(*args)
+            print "mode: ", arg
+            func = analysis.analysis
+            params["dimension"] = arg
+        elif opt == '-s':
+            print "site: ", arg
+            params["site"] = arg
         elif opt == '-u':
-            print "Try to cal user"
-            analysis.getUserCount()
-        elif opt == '-b':
-            print "Try to cal bbs user"
-            analysis.getBBSUserCount()
+            print "uuid: ", arg
+            params["uuid"] = arg
+        elif opt == '-r':
+            print "url: ", arg
+            params["url"] = arg
+        elif opt == '-t':
+            print "time: ", arg
+            params["uponTime"] = arg
         elif opt == '-d':
             print "Set debug mode"
             analysis._debug = True
         else:
             print "You suck"
+
+    print "func: ", func
+    print "params: ", params
+
+    if func:
+        func(params)
 
 if __name__ == "__main__":
     import sys
