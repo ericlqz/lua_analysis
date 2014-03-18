@@ -4,6 +4,8 @@
 import httplib2
 import json
 import sqlite3
+import time
+import datetime
 
 # TODO: 实现命令行参数
 # TODO: 根据时间、用户、源等多个维度进行分析
@@ -11,6 +13,10 @@ import sqlite3
 # TODO: 定时同步数据
 # TODO: 数据存储优化
 # TODO: 网盘源特殊分析处理
+
+import sys
+reload(sys)
+sys.setdefaultencoding('UTF8')
 
 class Analysis:
 
@@ -68,8 +74,9 @@ class Analysis:
 
     def __init__(self):
         self.dbHelper = DBHelper()
+        self.timeUtil = TimeUtil()
 
-    def syncData(self):
+    def syncData(self, params = None):
         """ 同步Lua抓取的后台日志 """
 
         lastTime = self.getLastTime()
@@ -214,8 +221,16 @@ class Analysis:
 
     def analysisOnSite(self, uponTime, params):
         """ 针对 源、时间段 进行日志分析 """
+
+        target = {"name": "源", "value": "所有"}
+        conditions = []
+        conditions.append(["uploadTime", ">", "'" + uponTime[0] + "'"])
+        if len(uponTime) > 1:
+            conditions.append(["uploadTime", "<", "'" + uponTime[1] + "'"])
+        self.doAnalysis(conditions, target)
+
         for sourceName in self.sources:
-            target = {"name": "源", "value": sourceName}
+            target = {"name": sourceName, "value": uponTime[0] + "~"}
             conditions = []
             conditions.append(["site", "=", "'" + sourceName + "'"])
             conditions.append(["uploadTime", ">", "'" + uponTime[0] + "'"])
@@ -230,9 +245,24 @@ class Analysis:
         """ 针对 用户、时间段 进行日志分析 """
         print "invoke analysisOnUser"
         if params:
-            uuid = params["uuid"]
-            target = {"name": "用户", "value": uuid}
-            conditions = []
+            uuid = params.get("uuid", None)
+            if uuid:
+                self.doAnalysisOnSpecUser(uponTime, uuid)
+            else:
+                file = params.get("file", None)
+                print "file: ", file
+                if file:
+                    f = open(file, 'r')
+                    lines = f.readlines()
+                    f.close()
+
+                    for line in lines:
+                        uuid = line.strip('\n')
+                        self.doAnalysisOnSpecUser(uponTime, uuid)
+
+    def doAnalysisOnSpecUser(self, uponTime, uuid):
+        target = {"name": "用户", "value": uuid}
+        conditions = []
 
         conditions.append(["uuid", "=", "'" + uuid + "'"])
         conditions.append(["uploadTime", ">", "'" + uponTime[0] + "'"])
@@ -246,18 +276,28 @@ class Analysis:
     def analysisOnMedia(self, uponTime, params):
         """ 针对 影片、时间段 进行日志分析 """
         if params:
-            media = params["url"]
-            self.analysisOnSpecMedia(uponTime, media)
-        else:
-            self.analysisAllErroredMedia(uponTime)
+            media = params.get("url", None)
+            if media:
+                self.analysisOnSpecMedia(uponTime, media, params)
+            else:
+                file = params.get("file", None)
+                print "file: ", file
+                if file:
+                    f = open(file, 'r')
+                    lines = f.readlines()
+                    f.close()
 
-    def analysisOnSpecMedia(self, uponTime, media):
+                    for line in lines:
+                        media = line.strip('\n')
+                        self.analysisOnSpecMedia(uponTime, media, params)
+        else:
+            self.analysisAllErroredMedia(uponTime, params)
+
+    def analysisOnSpecMedia(self, uponTime, media, params):
         """ 分析指定影片的错误日志 """
 
         target = {"name": "影片", "value": media}
-
         conditions = []
-        #con1 = ["url", "like", "'%" + media + "%'"]
 
         try:
             media.index("//")
@@ -283,9 +323,45 @@ class Analysis:
             print "media: ", media, " conditions: ", conditions
         self.doAnalysis(conditions, target)
 
-    def analysisAllErroredMedia(self, uponTime):
+        #if params.get("uuid", None):
+            #self.doAnalysisUrlOnUser(conditions, target, params)
+
+    def doAnalysisUrlOnUser(self, conditions = None, target = None, params = None):
+        """ 在网址维度上针对用户进一步分析 """
+        itemTotal = self.getTotalItemCount(conditions)
+        errorItemTotal = self.getTotalErrorItemCount(conditions)
+
+        rate = {"name": "比例", "value": self.percentage(errorItemTotal, itemTotal) + "(" + str(errorItemTotal) + "/" + str(itemTotal) + ")"}
+
+        queryStr = "select count(*) from item"
+        for index, cond in enumerate(conditions):
+            if index == 0:
+                queryStr += " where "
+            else:
+                queryStr += " and "
+
+            queryStr += " ".join(cond)
+
+        errorInfos = []
+
+        for code in self.error_codes:
+            queryStr_code = queryStr + " and code = " + code
+            if self._debug:
+                print 'queryStr_code: ', queryStr_code
+            errorCodeItemCount = self.dbHelper.queryTop(queryStr_code)
+
+            value = self.percentage(errorCodeItemCount, errorItemTotal)
+            if value and value != "0.00%":
+                errorInfos.append({"code": code, "value": value})
+
+        self.show(target, rate, errorInfos)
+        pass
+
+    def analysisAllErroredMedia(self, uponTime, params):
         """ 分析所有曾经出现错误的影片的错误日志 """
-        queryStr = "select url from item where code != 0 and site = 'pptv'"
+        queryStr = "select url from item where code != 0"
+        if params.get("site", None):
+            queryStr += " and site = '" + params.get("site") + "'"
         for ignore_code in self.ignore_codes:
             queryStr += " and code != " + ignore_code
         queryStr += " and uploadTime" + ">" + "'" + uponTime[0] + "'"
@@ -363,6 +439,71 @@ class Analysis:
         queryStr = "select max(uploadTime) from item"
         return self.dbHelper.queryTop(queryStr)
 
+    def queryData(self, params = None):
+        """ 从数据库中获取数据 """
+
+        if params and params.get("args"):
+            params = params.get("args")
+            site = "'" + params[0] + "'"
+            code = params[1]
+            uponTime = "'" + params[2] + "'"
+
+            if code == '-1':
+                queryStr = "select * from item where site = " + site + " and code != 0 and code != 35 " + " and uploadTime > " + uponTime
+            else:
+                queryStr = "select * from item where site = " + site + " and code = " + code + " and uploadTime > " + uponTime
+
+            items = self.dbHelper.query(queryStr)
+            for item in items:
+                print item
+
+    def calNewErrorOnDate(self, params = None):
+        """ 计算每日新增错误的分布 """
+        queryStr = "select min(uploadTime) from item where uploadTime != ''"
+
+        minTime = self.dbHelper.queryTop(queryStr)
+        minDateTime = self.timeUtil.getDatetimeFromStr(minTime)
+        now = datetime.datetime.now()
+
+        days = (now - minDateTime).days
+
+        items_total = {}
+        total = 0
+
+        for i in reversed(range(days + 1)):
+            timespan = self.timeUtil.getDayFromNowSpanStr(-i)
+            queryStr = "select url, code from item where code != 0 and code != 35"
+            queryStr += " and uploadTime > '" + str(timespan[0]) + "'"
+            queryStr += " and uploadTime < '" + str(timespan[1]) + "'"
+            #queryStr += " group by url, code"
+
+            if self._debug:
+                print "queryStr: ", queryStr
+            items = self.dbHelper.query(queryStr)
+
+            increase_count = 0
+
+            for item in items:
+                key = item[0] + "_" + str(item[1])
+                if not items_total.get(key, None):
+                    increase_count += 1
+                items_total[key] = items_total.get(key, 0) + 1
+            total += increase_count
+            if self._debug:
+                print "timespan:", timespan, " has ", len(items), " items. ", " increased count: ", increase_count
+            print str(timespan[0].month) + "." + str(timespan[0].day), ":", increase_count, "/", len(items)
+        if self._debug:
+            print "total:", total
+
+    def runSql(self, params = None):
+        """ 执行SQL语句 """
+        print "sql:", params.get("sql", None)
+        if params.get("sql", None):
+            sql = params["sql"]
+            results = self.dbHelper.query(sql)
+            for result in results:
+                print result
+
 
 class DBHelper:
     '数据库处理类'
@@ -416,12 +557,33 @@ class DBHelper:
         return row
 
 
+class TimeUtil:
+
+    ISOTIMEFORMAT='%Y-%m-%d %X'
+
+    def getCurrentTimeStr(self):
+        """ 获取当前系统时间，以字符串形式返回 """
+        return time.strftime(ISOTIMEFORMAT)
+
+    def getDayFromNowSpanStr(self, delta = 0):
+        """ 获取(当天 + delta天)的时间段, delta以天为单位 """
+        now = datetime.datetime.now()
+        time_start = datetime.datetime(now.year, now.month, now.day + delta)
+        time_end = datetime.datetime(now.year, now.month, now.day + delta, 23, 59, 59)
+
+        return (time_start, time_end)
+
+    def getDatetimeFromStr(self, s):
+        """ 转化字符串为 datetime 对象 """
+        format = '%Y-%m-%d %H:%M:%S'
+        return datetime.datetime.strptime(s, format)
+
 def main(argv):
 
     import getopt
 
     try:
-        opts, args = getopt.getopt(argv, "i:a:s:u:r:b:l:t:d", [''])
+        opts, args = getopt.getopt(argv, "i:a:s:u:r:b:l:t:dof:x:n", [''])
     except getopt.GetoptError:
         sys.exit(2)
 
@@ -453,6 +615,19 @@ def main(argv):
         elif opt == '-d':
             print "Set debug mode"
             analysis._debug = True
+        elif opt == '-o':
+            func = analysis.queryData
+            params["args"] = args
+            print
+        elif opt == '-f':
+            params["file"] = arg
+        elif opt == '-n':
+            func = analysis.calNewErrorOnDate
+        elif opt == '-x':
+            params["sql"] = arg
+            func = analysis.runSql
+        elif opt == '-n':
+            func = analysis.calNewErrorOnDate
         else:
             print "You suck"
 
