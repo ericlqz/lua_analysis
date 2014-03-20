@@ -10,6 +10,20 @@ import re
 
 # TODO: 网盘源特殊分析处理
 # TODO: 交叉分析
+# TODO: site -s 源(影片列表) -c 源(某错误的影片列表)
+# TODO: url -r 地址 -u (某链接错误的用户分布)
+# TODO: user -u 用户 -s(用户在各源的分布) -c(在各错误码的分布)
+# TODO: 时间段?
+# TODO: 影响抓取的因素
+# TODO: 各个源的前端抓取策略
+# TODO: 哪个错误代码，客户端重试
+# TODO: 哪些错误代码，反馈给服务端(或人工验证) 1, 6, 7 VS FastCheck
+# TODO: 客户端日志模块
+# TODO: 各类型影片数据量估计
+# TODO: 收费源后端处理(客户端报错、服务端缓存): 热门影片 vs 网盘?
+# TODO: 所谓时效
+# TODO: 抓取地址: 带IP/不带IP
+# TODO: 单影片报警 VS 源报警
 
 import sys
 reload(sys)
@@ -20,12 +34,13 @@ class Analysis:
 
     """请求源的名称"""
     sources = [
-        u'tudou', u'wole56', u'sina', u'sohu',
+        u'tudou', u'wole56', u'sohu',
         u'youku', u'cntv', u'm1905', u'letv',
         u'qiyi', u'qq', u'fengxing', u'pps',
         u'bps', u'pptv', u'kankan', u'tv189',
         u'baofeng'
     ]
+    # u'tudou', u'wole56', u'sina', u'sohu',
 
     """请求源的日志地址的链接前缀"""
     source_prefix = u"http://api.wanhuatong.tv/lua/geterror?site="
@@ -69,6 +84,12 @@ class Analysis:
         self.appendItemCount = 0
         # 数据同步错误日志
         self.log_file_name = "sync_log"
+        # 默认查询参数
+        self.conditions = []
+        self.conditions.extend(self.getTimespanCondition())
+        lua_version_condition = self.getLuaVersionCondition()
+        if lua_version_condition:
+            self.conditions.append(lua_version_condition)
 
     def startWork(self):
         """ 根据命令行参数决定运行 """
@@ -271,21 +292,22 @@ class Analysis:
     def calSiteErrorDistribute(self):
         """ 计算各源错误分布 """
         target = {"name": "源", "value": "所有"}
-        conditions = self.getTimespanCondition()
-        self.doAnalysisError(conditions, target)
+        #conditions = self.getTimespanCondition()
+        self.doAnalysisError(self.conditions, target)
 
         designated_site = self.options.site
         sync_site_names = (designated_site,) if designated_site else self.sources
 
         for sourceName in sync_site_names:
             target = {"name": sourceName, "value": "~".join(self.getTimespan())}
-            conditions = []
-            conditions.append(["site", "=", "'" + sourceName + "'"])
-            conditions.extend(self.getTimespanCondition())
+            site_conditions = []
+            site_conditions.append(["site", "=", "'" + sourceName + "'"])
+            site_conditions.extend(self.conditions)
+            #conditions.extend(self.getTimespanCondition())
 
             if self.options.debug:
-                print "source: ", sourceName, " conditions: ", conditions
-            self.doAnalysisError(conditions, target)
+                print "source: ", sourceName, " conditions: ", site_conditions
+            self.doAnalysisError(site_conditions, target)
 
     def doAnalysisError(self, conditions = None, target = None):
         """ 根据传入条件分析错误比例 """
@@ -389,11 +411,18 @@ class Analysis:
     def getTimespanCondition(self):
         """ 获取用户输入的时间段 """
         uponTime = self.getTimespan()
-        conditions = []
-        conditions.append(["uploadTime", ">", "'" + uponTime[0] + "'"])
+        time_conditions = []
+        time_conditions.append(["uploadTime", ">", "'" + uponTime[0] + "'"])
         if len(uponTime) > 1:
-            conditions.append(["uploadTime", "<", "'" + uponTime[1] + "'"])
-        return conditions
+            time_conditions.append(["uploadTime", "<", "'" + uponTime[1] + "'"])
+        return time_conditions
+
+    def getLuaVersionCondition(self):
+        """ 获取Lua脚本版本参数 """
+        lua_version = self.options.lua_version
+        if lua_version:
+            lua_version_condition = ["lua_version", ">", "'" + lua_version + "'"]
+            return lua_version_condition
 
     def addAndConditionsToStr(self, conditions, queryStr):
         """ 追加查询条件到 Query 语句中 """
@@ -496,7 +525,6 @@ class TimeUtil:
         return datetime.datetime.strptime(s, format)
 
 
-
 def main():
     """ 解析命令行参数 """
     from optparse import OptionParser
@@ -509,6 +537,7 @@ def main():
     parser.add_option("-u", "--uuid", dest="uuid", help="[Analysis]. Designated user")
     parser.add_option("-r", "--url", dest="url", help="[Analysis]. Designated url")
     parser.add_option("-c", "--code", dest="code", help="[Analysis]. Designated code")
+    parser.add_option("-l", "--lua", dest="lua_version", help="[Analysis, Error]. Designated lua_version")
     parser.add_option("-q", "--sql", dest="sql", help="[Sql]. Raw sql sentence")
     parser.add_option("-t", "--timespan", dest="timespan", help="[Analysis, Error]. Timespan for analysis")
     parser.add_option("-p", "--side", dest="side", default="site", help="[Error]. Side for error analysis. Options: [all|site|increment]")
@@ -517,7 +546,10 @@ def main():
     if len(args) != 1:
         parser.error("incorrect number of arguments")
 
-    analysis = Analysis(options, args, "2014-03-18 19")
+    now = datetime.datetime.now()
+    startTime = datetime.datetime(now.year, now.month, now.day -1, 19, 0, 0)
+
+    analysis = Analysis(options, args, str(startTime))
     analysis.startWork()
 
 
