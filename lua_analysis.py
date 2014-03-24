@@ -13,6 +13,7 @@ import re
 # TODO: site -s 源(影片列表) -c 源(某错误的影片列表)
 # TODO: url -r 地址 -u (某链接错误的用户分布)
 # TODO: user -u 用户 -s(用户在各源的分布) -c(在各错误码的分布)
+
 # TODO: 时间段?
 # TODO: 影响抓取的因素
 # TODO: 各个源的前端抓取策略
@@ -33,14 +34,24 @@ sys.setdefaultencoding('UTF8')
 class Analysis:
 
     """请求源的名称"""
-    sources = [
+    site_sources = [
         u'tudou', u'wole56', u'sohu',
         u'youku', u'cntv', u'm1905', u'letv',
         u'qiyi', u'qq', u'fengxing', u'pps',
-        u'bps', u'pptv', u'kankan', u'tv189',
-        u'baofeng'
+        u'pptv', u'kankan', u'tv189', u'baofeng'
+    ] # u'sina'
+
+    pan_sources = ["bps"]
+
+    sources = site_sources[:]
+    sources.extend(pan_sources)
+
+    """ 网盘名称 """
+    pan_names = [
+        "baiduyun",
+        "xunlei",
+        "vmall"
     ]
-    # u'tudou', u'wole56', u'sina', u'sohu',
 
     """请求源的日志地址的链接前缀"""
     source_prefix = u"http://api.wanhuatong.tv/lua/geterror?site="
@@ -219,6 +230,26 @@ class Analysis:
         return self.dbHelper.queryTop(queryStr_total_error)
 
     def analysis(self):
+        """ 对错误的交互式分析 """
+        print 'Start Analysis. Avaiable command: '
+        command = self.parseCommand()
+        while command:
+            resultSet = self.applyCommand(command)
+            self.showResultSet(resultSet)
+            command = self.parseCommand()
+        print 'Finish Analysis.'
+
+    def parseCommand(self):
+        """ 解析用户输入命令 """
+        userInput = input("Please type command: ")
+        pass
+
+    def applyCommand(self, command):
+        """ 应用命令，维护命令栈、投影栈、结果集栈 """
+        pass
+
+    def showResultSet(self, resultSet):
+        """ 显示结果集 """
         pass
 
     def runQuery(self, query = None):
@@ -235,10 +266,10 @@ class Analysis:
 
     def calError(self):
         """
-        总结计算错误情况.
-        state: 整体错误分布
-        site: 计算各源错误分布
-        increment: 计算每日新增错误
+         总结计算错误情况.
+         state: 整体错误分布
+         site: 计算各源错误分布
+         increment: 计算每日新增错误
         """
         side = self.options.side
 
@@ -291,23 +322,42 @@ class Analysis:
 
     def calSiteErrorDistribute(self):
         """ 计算各源错误分布 """
+        # 计算全部源的错误分布
         target = {"name": "源", "value": "所有"}
-        #conditions = self.getTimespanCondition()
         self.doAnalysisError(self.conditions, target)
 
+        # 计算网站源的错误分布
         designated_site = self.options.site
-        sync_site_names = (designated_site,) if designated_site else self.sources
+        sync_site_names = (designated_site,) if designated_site else self.site_sources
 
         for sourceName in sync_site_names:
             target = {"name": sourceName, "value": "~".join(self.getTimespan())}
             site_conditions = []
             site_conditions.append(["site", "=", "'" + sourceName + "'"])
             site_conditions.extend(self.conditions)
-            #conditions.extend(self.getTimespanCondition())
 
             if self.options.debug:
                 print "source: ", sourceName, " conditions: ", site_conditions
             self.doAnalysisError(site_conditions, target)
+
+        # 计算网盘源的错误分布
+        self.calPanSiteErrorDistribute(designated_site)
+
+    def calPanSiteErrorDistribute(self, designated_site):
+        """ 计算网盘源的错误分布"""
+        pan_source_names = (designated_site,) if designated_site else self.pan_sources
+
+        for sourceName in pan_source_names:
+            for panName in self.pan_names:
+                target = {"name": sourceName + "/" + panName, "value": "~".join(self.getTimespan())}
+                site_conditions = []
+                site_conditions.append(["site", "=", "'" + sourceName + "'"])
+                site_conditions.extend(self.conditions)
+                site_conditions.append(["url", "like", "'%" + panName + "%'"])
+
+                if self.options.debug:
+                    print "source: ", sourceName, "panName: ", panName, " conditions: ", site_conditions
+                self.doAnalysisError(site_conditions, target)
 
     def doAnalysisError(self, conditions = None, target = None):
         """ 根据传入条件分析错误比例 """
@@ -450,6 +500,57 @@ class Analysis:
             return "0.00%"
         return "{:.2%}".format(float(part)/float(total))
 
+class Command:
+    """ 用户命令类 """
+
+    available = [
+        '-s', '-c', '-u', '-r', '-l', '-t',
+        '..', 'cd ..', 'cd', '/', 'exit'
+    ]
+
+    types = ['query', 'opearte']
+
+    def __init__(self, commandStr):
+        pass
+
+    def isCommandSupport(self, commandStr):
+        """ 检测命令是否支持 """
+        commandParts = re.split('=', commandStr)
+
+        if len(commandParts) != 3:
+            return False
+
+        commandParts = [x.strip() for x in commandParts]
+        return commandParts[0] in self.available
+
+    def getCommandType(self, command):
+        """ 获取命令的类型 """
+        pass
+
+class Stack:
+    """ 栈 """
+
+    def __init__(self):
+        """ 栈初始化 """
+        self.stack = []
+
+    def push(self, item):
+        """ 数据入栈 """
+        self.stack.append(item)
+
+    def pop(self):
+        """ 栈顶数据出栈 """
+        try:
+            return self.stack.pop()
+        except IndexError:
+            return None
+
+    def peek(sefl):
+        """ 查看栈顶数据 """
+
+    def isEmpty(self):
+        """ 判断栈是否为空 """
+        return len(self.stack) == 0
 
 class DBHelper:
     '数据库处理类'
@@ -531,7 +632,7 @@ def main():
 
     usage = "usage: %prog action[sync|analysis|error|sql] [options]"
     parser = OptionParser(usage = usage)
-    parser.add_option("-d", "--debug", dest="debug", help="[Global]. Print debug messages to stdout", default=False, action="store_true")
+    parser.add_option("-v", "--verbose", dest="debug", help="[Global]. Print debug messages to stdout", default=False, action="store_true")
     parser.add_option("-m", "--mode", dest="mode", help="[Analysis]. Analysis mode. Options: [site|user|url]", default="site")
     parser.add_option("-s", "--site", dest="site", help="[Sync, Analysis, Error]. Designated site", metavar="letv")
     parser.add_option("-u", "--uuid", dest="uuid", help="[Analysis]. Designated user")
