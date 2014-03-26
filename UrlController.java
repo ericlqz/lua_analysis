@@ -1,10 +1,11 @@
 package cn.box.lua;
 
-import android.app.Activity;
-import cn.box.play.widget.PlaySettingController;
+import cn.box.play.utils.Log;
 import cn.box.utils.CommonUtils;
+import net.tsz.afinal.core.Arrays;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -16,8 +17,6 @@ public class UrlController {
 
     private static final String TAG = "UrlController";
 
-    // Status: Init
-    private static final int STATUS_INIT = 0x00;
     // Status: Using Url from Server
     private static final int STATUS_USING_SERVER_URL = 0x01;
     // Status: Using Url from Lua Script
@@ -29,16 +28,14 @@ public class UrlController {
     // Status: Final Play Failed
     private static final int STATUS_URL_FAILED = 0x05;
 
-    // Event: Start
-    private static final int EVENT_START = 0x00;
     // Event: Try Url, Success Response from MediaPlayer
-    private static final int EVENT_PLAY_SUCCESS = 0x01;
+    public static final int EVENT_PLAY_SUCCESS = 0x01;
     // Event: Try Url, Failed Response from MediaPlayer
-    private static final int EVENT_PLAY_FAILED = 0x02;
+    public static final int EVENT_PLAY_FAILED = 0x02;
     // Event: Lua Crawl Failed or Timeout
-    private static final int EVENT_LUA_FAILED_TIMEOUT= 0x03;
+    public static final int EVENT_LUA_FAILED_TIMEOUT= 0x03;
     // Event: Server Retry Response Failed
-    private static final int EVENT_RETRY_REQUEST_FAILED = 0x04;
+    public static final int EVENT_RETRY_REQUEST_FAILED = 0x04;
 
     // Action When enter status
     // Action: Run lua script when enter status: STATUS_USING_LUA_URL
@@ -46,11 +43,12 @@ public class UrlController {
     // Action: Run lua script when enter status: STATUS_USING_RETRY_URL
     private static final int ACTION_RETRY_GET_URL = 0x02;
     // Action: Try to change source when all three kinds url failed
-    private static final int ACTION_TRY_CHANGE_SOURCE = 0x03;
+    private static final int ACTION_NOTIFY_ERROR = 0x03;
     // Action: Notify Url is available
     private static final int ACTION_URL_AVAILABLE = 0x04;
-    // Action: Do Nothing
-    private static final int ACTION_DO_NOTHING = 0x05;
+
+    private static final int RESPONSE_DONE = 0x01;
+    private static final int RESPONSE_CONTINUE = 0x02;
 
     /**
      * 播放地址确定的回调
@@ -59,187 +57,160 @@ public class UrlController {
         public void onPlayUrlDetermined(String playUrl);
     }
 
-    /**
-     * 根据Lua控制信息获取Url策略
-     * @param luaInfo
-     * @return
-     */
-//    public static UrlStrategy getUrlStrategy(LuaControlInfo luaInfo) {
-//        return new DefaultStrategy();
-//    }
+    private HashMap<Integer, List<Integer>> statusToEvent = new HashMap<Integer, List<Integer>>();
+    private HashMap<Integer, Integer> eventToResponse = new HashMap<Integer, Integer>();
+    private HashMap<Integer, Integer> statusToAction = new HashMap<Integer, Integer>();
+
+    private String mPlayUrl;
+    private int mCurStatus = -1;
+    private List<Transition> mTransitionTable = new ArrayList<Transition>();
+    private UrlDetermineListener mUrlDetermineListener;
+
+    public UrlController() {
+
+        // 初始化 状态 - 事件 的映射
+        statusToEvent.put(STATUS_USING_SERVER_URL, Arrays.asList(EVENT_PLAY_FAILED, EVENT_PLAY_SUCCESS));
+        statusToEvent.put(STATUS_USING_LUA_URL, Arrays.asList(EVENT_PLAY_FAILED, EVENT_PLAY_SUCCESS, EVENT_LUA_FAILED_TIMEOUT));
+        statusToEvent.put(STATUS_USING_RETRY_URL, Arrays.asList(EVENT_PLAY_FAILED, EVENT_PLAY_SUCCESS, EVENT_RETRY_REQUEST_FAILED));
+        statusToEvent.put(STATUS_URL_SUCCESS, Arrays.asList(EVENT_PLAY_FAILED));
+
+        // 初始化 事件 - 响应 的映射
+        eventToResponse.put(EVENT_PLAY_FAILED, RESPONSE_CONTINUE);
+        eventToResponse.put(EVENT_PLAY_SUCCESS, RESPONSE_DONE);
+        eventToResponse.put(EVENT_LUA_FAILED_TIMEOUT, RESPONSE_CONTINUE);
+        eventToResponse.put(EVENT_RETRY_REQUEST_FAILED, RESPONSE_CONTINUE);
+
+        // 初始化 状态 - Action 的映射
+        statusToAction.put(STATUS_USING_SERVER_URL, ACTION_URL_AVAILABLE);
+        statusToAction.put(STATUS_USING_LUA_URL, ACTION_START_LUA_CRAWL);
+        statusToAction.put(STATUS_USING_RETRY_URL, ACTION_RETRY_GET_URL);
+        statusToAction.put(STATUS_URL_FAILED, ACTION_NOTIFY_ERROR);
+    }
 
     /**
-     * 策略类
+     * 根据传入的策略生成状态迁移表
+     * 当前存在三种播放地址：服务端返回地址(0x01)、Lua前端抓取返回地址(0x02)、请求服务端即时重抓地址(0x03)
+     * 每种策略都是 三种地址中至少两种地址 的排序
+     * 如
+     *  默认策略: [1, 3]服务端返回地址、请求服务端即时重抓地址，表示 若服务端返回地址播放失败，则尝试服务端即时重抓，若仍然失败，则抛出错误。
+     *  其它可选策略: [2, 1, 3] 表示按照 Lua前端抓取返回地址、服务端返回地址、请求服务端即时重抓地址 的顺序
+     * @param strategy
      */
-    static abstract class UrlStrategy {
-
-        private UrlDetermineListener mUrlDetermineListener;
-        private PlaySettingController mSettingController;
-        private Activity mActivity;
-        private LuaControlInfo mLuaInfo;
-
-        protected List<Transition> transitions = new ArrayList<Transition>();
-        protected int mCurState = STATUS_INIT;
-
-        protected UrlStrategy(UrlDetermineListener urlDetermineListener, PlaySettingController settingController) {
-            this.mUrlDetermineListener = urlDetermineListener;
-            this.mSettingController = settingController;
-            enterState(getInitTransition());
+    public void applyStrategy(int[] strategy) {
+        if (strategy == null || strategy.length <= 1) {
+            Log.d(TAG, "Strategy Empty. Set to default strategy.");
+            strategy = getDefaultStrategy();
         }
 
-        protected void enterState(Transition transition) {
-            if (transition != null) {
-                mCurState = transition.action();
-            }
-        }
+        // 生成状态迁移表
+        for (int i = 0; i < strategy.length; i++) {
+            int startStatus = strategy[i];
+            List<Integer> availableEvents = statusToEvent.get(startStatus);
+            if (CommonUtils.isListNotEmpty(availableEvents)) {
+                for (Integer event : availableEvents) {
+                    Integer response = eventToResponse.get(event);
+                    if (response != null) {
 
-        protected int getState() {
-            return mCurState;
-        }
+                        int nextStatus;
+                        if (i + 1 < strategy.length) {
+                            nextStatus = strategy[i+1];
+                        } else {
+                            nextStatus = STATUS_URL_FAILED;
+                        }
 
-        protected void handle(int event) {
-            int curState = getState();
-            List<Transition> transitions = getTransitionList();
-
-            if (CommonUtils.isListEmpty(transitions)) {
-                return;
-            }
-
-            for (Transition transition : transitions) {
-                if (curState == transition.startState && event == transition.event) {
-                    enterState(transition);
-                    break;
+                        int endStatus = (response == RESPONSE_DONE) ? STATUS_URL_SUCCESS : nextStatus;
+                        Log.d(TAG, "generate transition [" + startStatus +  ", " + event + ", " + endStatus + "]");
+                        mTransitionTable.add(new Transition(startStatus, event, endStatus));
+                    }
                 }
             }
         }
 
-        public void doAction(int action) {
-            switch(action) {
-                case ACTION_RETRY_GET_URL:
-                    break;
-                case ACTION_URL_AVAILABLE:
-                    break;
-                case ACTION_START_LUA_CRAWL:
-                    break;
-                case ACTION_TRY_CHANGE_SOURCE:
-                    break;
-                case ACTION_DO_NOTHING:
-                    break;
+        // 进入初始状态
+        Log.d(TAG, "enter initial status: " + strategy[0]);
+        enterStatus(strategy[0]);
+    }
+
+    /**
+     * 设置播放默认策略 [1, 3]
+     */
+    private int[] getDefaultStrategy() {
+        return new int[] {STATUS_USING_SERVER_URL, STATUS_USING_RETRY_URL};
+    }
+
+    /**
+     * 响应事件处理，切换状态
+     * @param event
+     */
+    public void handle(int event) {
+        for (Transition transition : mTransitionTable) {
+            if (mCurStatus == transition.startStatus && transition.event == event) {
+                enterStatus(transition.endStatus);
+                break;
             }
         }
-
-        public String getUrl() {
-            return mSettingController.getUrl();
-        }
-
-        public void onPlaySuccess() {
-            handle(EVENT_PLAY_SUCCESS);
-        }
-
-        public void onPlayFailed() {
-            handle(EVENT_PLAY_FAILED);
-        }
-
-        public void onRetryRequestFailed() {
-            handle(EVENT_RETRY_REQUEST_FAILED);
-        }
-
-        public void onLuaFailedTimeout() {
-            handle(EVENT_LUA_FAILED_TIMEOUT);
-        }
-
-        protected abstract Transition getInitTransition();
-
-        protected abstract void setTransitionList(List<Transition> transitionList);
     }
 
     /**
-     * 默认策略，服务端地址-> 重抓 -> 切源/失败
+     * 根据当前状态返回播放链接
+     * @return
      */
-    static class DefaultStrategy extends UrlStrategy {
-
-        public DefaultStrategy(UrlDetermineListener urlDetermineListener, PlaySettingController settingController) {
-            super(urlDetermineListener, settingController);
-        }
-
-        @Override
-        protected Transition getInitTransition() {
-            return new Transition(this, STATUS_INIT, EVENT_START, STATUS_USING_SERVER_URL, ACTION_URL_AVAILABLE);
-        }
-
-        @Override
-        protected void setTransitionList(List<Transition> transitionList) {
-            transitions.add(new Transition(this, STATUS_USING_SERVER_URL, EVENT_PLAY_SUCCESS, STATUS_URL_SUCCESS, ACTION_DO_NOTHING));
-            transitions.add(new Transition(this, STATUS_USING_SERVER_URL, EVENT_PLAY_FAILED, STATUS_USING_RETRY_URL, ACTION_RETRY_GET_URL));
-            transitions.add(new Transition(this, STATUS_USING_RETRY_URL, EVENT_PLAY_SUCCESS, STATUS_URL_SUCCESS, ACTION_DO_NOTHING));
-            transitions.add(new Transition(this, STATUS_USING_RETRY_URL, EVENT_PLAY_FAILED, STATUS_URL_FAILED, ACTION_TRY_CHANGE_SOURCE));
-        }
-
+    public String getUrl() {
+        return null;
     }
 
     /**
-     * 前端优先策略， 前端抓取地址-> 服务端地址 -> 重抓 -> 切源/失败
+     * 设置Lua及重抓地址成功时的回调
+     * @param urlDetermineListener
      */
-    static class LuaPriorStrategy extends UrlStrategy {
+    public void setUrlDetermineListener(UrlDetermineListener urlDetermineListener) {
+        this.mUrlDetermineListener = urlDetermineListener;
+    }
 
-        protected LuaPriorStrategy(UrlDetermineListener urlDetermineListener, PlaySettingController settingController) {
-            super(urlDetermineListener, settingController);
+    /**
+     * 进入某状态，并执行相应的Action
+     * @param status
+     */
+    private void enterStatus(int status) {
+        Integer action = statusToAction.get(status);
+        if (action != null) {
+            doAction(action);
         }
 
-        @Override
-        protected Transition getInitTransition() {
-            return new Transition(this, STATUS_INIT, EVENT_START, STATUS_USING_LUA_URL, ACTION_START_LUA_CRAWL);
-        }
+        mCurStatus = status;
 
-        @Override
-        protected void setTransitionList(List<Transition> transitionList) {
-            transitionList.add(new Transition(this, ))
+        // TODO: 日志
+    }
+
+    /**
+     * 执行某Action
+     * @param action
+     */
+    private void doAction(int action) {
+        switch(action) {
+            case ACTION_START_LUA_CRAWL:
+                break;
+            case ACTION_URL_AVAILABLE:
+                break;
+            case ACTION_RETRY_GET_URL:
+                break;
+            case ACTION_NOTIFY_ERROR:
+                break;
         }
     }
 
     /**
-     * 后端优先策略， 服务端地址-> 前端抓取地址 -> 重抓 -> 切源/失败
+     * 状态迁移表项
      */
-    static class ServerPriorStrategy extends UrlStrategy {
-
-        protected ServerPriorStrategy(UrlDetermineListener urlDetermineListener, PlaySettingController settingController) {
-            super(urlDetermineListener, settingController);
-        }
-
-        @Override
-        protected Transition getInitTransition() {
-            return new Transition(this, STATUS_INIT, EVENT_START, STATUS_USING_RETRY_URL, ACTION_RETRY_GET_URL);
-        }
-
-        @Override
-        protected void setTransitionList(List<Transition> transitionList) {
-
-        }
-    }
-
-    /**
-     * 状态迁移类
-     */
-    static class Transition {
-
-        UrlStrategy urlStrategy;
-
-        int startState;
+    class Transition {
+        int startStatus;
         int event;
-        int endState;
-        int action;
+        int endStatus;
 
-        Transition(UrlStrategy urlStrategy, int startState, int event, int endState, int action) {
-            this.urlStrategy = urlStrategy;
-            this.startState = startState;
+        Transition(int startStatus, int event, int endStatus) {
+            this.startStatus = startStatus;
             this.event = event;
-            this.endState = endState;
-            this.action = action;
-        }
-
-        public int action() {
-            urlStrategy.doAction(action);
-            return endState;
+            this.endStatus = endStatus;
         }
     }
 

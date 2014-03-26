@@ -55,6 +55,7 @@ class Analysis:
 
     """请求源的日志地址的链接前缀"""
     source_prefix = u"http://api.wanhuatong.tv/lua/geterror?site="
+    uuid_to_box_url = u"http://api.wanhuatong.tv/getclientinfo?uuid="
 
     """所有错误码"""
     error_codes = [
@@ -64,7 +65,11 @@ class Analysis:
     #"35":"script time out",
 
     """ 暂时忽略计算的错误码 """
-    ignore_codes = ["35"]
+    ignore_codes = ["35", "39", "40", "101"]
+    #ignore_codes = ["40"]
+
+    """ 忽略的测试设备 """
+    ignore_uuids = ["8AD86FD897E029B033E34CF8B5323018"]
 
     """有错误码的描述"""
     error_desc = {
@@ -99,13 +104,16 @@ class Analysis:
         self.conditions = []
         self.conditions.extend(self.getTimespanCondition())
         lua_version_condition = self.getLuaVersionCondition()
+        apk_version_condition = self.getApkVersionCondition()
         if lua_version_condition:
             self.conditions.append(lua_version_condition)
+        if apk_version_condition:
+            self.conditions.append(apk_version_condition)
 
     def startWork(self):
         """ 根据命令行参数决定运行 """
         func_map = {
-            "sync": self.syncData,
+           "sync": self.syncData,
             "analysis": self.analysis,
             "sql": self.runQuery,
             "error": self.calError
@@ -129,11 +137,11 @@ class Analysis:
         h = httplib2.Http(".cache")
         for sourceName in sync_site_names:
             print "start source: ", sourceName
-            resp, content = h.request(self.source_prefix + sourceName)
+            resp, content = h.request(self.source_prefix + sourceName + "&flag=1")
 
             # 若请求失败，尝试重试
             retry = 0
-            while not content and retry > 2:
+            while not content and retry > 10:
                 print "Failed ", sourceName, " Retry"
                 resp, content = h.request(self.source_prefix + sourceName)
                 retry += 1
@@ -194,7 +202,8 @@ class Analysis:
         item["uploadTime"] = data.get("uploadTime", "")
 
         if item["uploadTime"] > lastTime:
-            print "Store new item: ", item
+            if self.options.debug:
+                print "Store new item: ", item
             self.dbHelper.store(item)
             self.appendItemCount += 1
 
@@ -242,7 +251,6 @@ class Analysis:
     def parseCommand(self):
         """ 解析用户输入命令 """
         userInput = input("Please type command: ")
-        pass
 
     def applyCommand(self, command):
         """ 应用命令，维护命令栈、投影栈、结果集栈 """
@@ -474,6 +482,13 @@ class Analysis:
             lua_version_condition = ["lua_version", ">", "'" + lua_version + "'"]
             return lua_version_condition
 
+    def getApkVersionCondition(self):
+        """ 获取版本参数 """
+        apk_version = self.options.version
+        if apk_version:
+            apk_version_condition = ["version", ">=", "'" + apk_version + "'"]
+            return apk_version_condition
+
     def addAndConditionsToStr(self, conditions, queryStr):
         """ 追加查询条件到 Query 语句中 """
         if conditions and queryStr:
@@ -505,7 +520,7 @@ class Command:
 
     available = [
         '-s', '-c', '-u', '-r', '-l', '-t',
-        '..', 'cd ..', 'cd', '/', 'exit'
+        '..', 'cd', 'exit'
     ]
 
     types = ['query', 'opearte']
@@ -632,13 +647,14 @@ def main():
 
     usage = "usage: %prog action[sync|analysis|error|sql] [options]"
     parser = OptionParser(usage = usage)
-    parser.add_option("-v", "--verbose", dest="debug", help="[Global]. Print debug messages to stdout", default=False, action="store_true")
+    parser.add_option("-d", "--debug", dest="debug", help="[Global]. Print debug messages to stdout", default=False, action="store_true")
     parser.add_option("-m", "--mode", dest="mode", help="[Analysis]. Analysis mode. Options: [site|user|url]", default="site")
     parser.add_option("-s", "--site", dest="site", help="[Sync, Analysis, Error]. Designated site", metavar="letv")
     parser.add_option("-u", "--uuid", dest="uuid", help="[Analysis]. Designated user")
     parser.add_option("-r", "--url", dest="url", help="[Analysis]. Designated url")
     parser.add_option("-c", "--code", dest="code", help="[Analysis]. Designated code")
     parser.add_option("-l", "--lua", dest="lua_version", help="[Analysis, Error]. Designated lua_version")
+    parser.add_option("-v", "--version", dest="version", help="[Analysis, Error]. Designated version")
     parser.add_option("-q", "--sql", dest="sql", help="[Sql]. Raw sql sentence")
     parser.add_option("-t", "--timespan", dest="timespan", help="[Analysis, Error]. Timespan for analysis")
     parser.add_option("-p", "--side", dest="side", default="site", help="[Error]. Side for error analysis. Options: [all|site|increment]")
@@ -649,6 +665,8 @@ def main():
 
     now = datetime.datetime.now()
     startTime = datetime.datetime(now.year, now.month, now.day -1, 19, 0, 0)
+
+    options.version = "1.2325"
 
     analysis = Analysis(options, args, str(startTime))
     analysis.startWork()
